@@ -18,38 +18,43 @@ start:
 
     ; Print messages
     mov dx, 0
-    mov ax, 0x1301
-    mov bx, 0x07
     mov bp, welcome
-    mov cx, 19
-    int 0x10
+    mov cx, 26
+    call print
+
     mov dx, 0x0100
     mov bp, guide
     mov cx, 38
-    int 0x10
+    call print
 
 input_loop:
     ; Get a page number (F1, F2, ... , F10)
     mov ah, 0x0
     int 0x16
 
-    cmp ah, 0x3B    ; if (scancode < F1)   #F1 = 0x3B
+    cmp ah, 0x3B         ; F1 = 0x3B
     jl input_loop
-
-    cmp ah, 0x44    ; if (scancode > F10)  #F10 = 0x44
+    cmp ah, 0x44         ; F10 = 0x44
     jg input_loop
 
 load_page_and_start_writing:
+
     ; Get sector number (1-code, 2-page1, 3-page2, ... , 11-page10)
-    ; ah = ah - scancode(F1) + 2
-    sub ah, 0x39
+    sub ah, 0x3B
+    mov [current_page], ah
 
-
-    ;-read page sector
-
-
-    mov dx, 0x0400  ; This is the edge of edit space (row - 4, column - 0)
+    mov dx, 0x0400       ; Edge of edit space (row - 4, column - 0)
     call set_cursor_position
+
+    ; Read page from hard drive (open page)
+    mov ah, 0x2
+    call read_or_write_sector
+
+    mov ax, 0x1300
+    mov bp, 0x7E00
+    mov cx, 510
+    mov bx, 0x07
+    int 0x10
 
     xor si, si
 
@@ -63,17 +68,22 @@ write_loop:
     cmp ah, 0x44
     jg .is_not_a_function_key
 
-
-    ;-write 0x7E00 into current sector
-
+    ; Write into current page sector (save page)
+    push ax
+    mov ah, 0x3
+    call read_or_write_sector
+    pop ax
 
     jmp load_page_and_start_writing
 
 .is_not_a_function_key:
 
+    cmp ah, 0x4B ;left
+    je .left
+    cmp ah, 0x4D ;right
+    je .right
     cmp ah, 0xE          ; Backspace = 0xE
     je .delete_symbol
-
     cmp si, 510          ; 510 - Max text size  (sector = 510B + 2B(signature) = 512B)
     je write_loop
 
@@ -83,21 +93,17 @@ write_loop:
     mov bx, 0x07
     mov cx, 1
     int 0x10
-
     inc dl
 
     cmp dl, 80           ; Column = 79 - right edge (before "inc dl")
     je .next_line
 
     call set_cursor_position
-
     jmp write_loop
-
 
 .delete_symbol:
     cmp si, 0
     je write_loop
-
     cmp dl, 0
     jne ..is_not_the_edge
 
@@ -118,21 +124,42 @@ write_loop:
 
     jmp write_loop
 
-
 .next_line:
     inc dh
     xor dl, dl
     call set_cursor_position
     jmp write_loop
 
+.left:
+    cmp dl, 0
+    je write_loop
+    dec dl
+    call set_cursor_position
+    jmp write_loop
+
+.right:
+    cmp dl, 79
+    je write_loop
+    inc dl
+    call set_cursor_position
+    jmp write_loop
+
     cli
     hlt
 
+; *PROCEDURES*
 
-; This procedure reads from a sector into the buffer (0x7E00) or
-; writes to sector from the buffer.
+; Print a string
+; dx - position  bp - string  cx - size
+print:
+    mov ax, 0x1301
+    mov bx, 0x07
+    int 0x10
+    ret
+
+
+; This procedure reads from a sector (current_page) into the buffer (0x7E00) or writes to sector from the buffer.
 ;        ah: 0x2-read  0x3-write, cl - sector number
-
 read_or_write_sector:
     push dx
     push ax
@@ -141,6 +168,8 @@ read_or_write_sector:
     pop ax
     mov bx, 0x7E00  ; 0x7E00 is the next available memory after the boot sector
     mov ch, 0
+    mov cl, [current_page]
+    add cl, 2
     mov dh, 0
     mov dl, 0x80    ; dl - drive number (0x80 - HDD)
     mov al, 1
@@ -157,8 +186,10 @@ set_cursor_position:
     ret
 
 
-welcome db 'Welcome to Notepad!'
-guide db 'Press a function key to open its page.'
+welcome db "Welcome to System Notepad!"
+guide db "Press a function key to open its page."
+
+current_page db ?
 
 
 times (510-($-$$)) db 0
